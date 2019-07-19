@@ -141,7 +141,7 @@ type Handler struct {
 }
 
 func (h Handler) String() string {
-	return pattern.String()
+	return h.pattern.String()
 }
 
 func (h *Handler) RemoveTimestamp() *Handler {
