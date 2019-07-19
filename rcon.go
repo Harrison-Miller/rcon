@@ -3,6 +3,7 @@ package rcon
 import (
 	"bufio"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"strings"
 	"time"
@@ -32,21 +33,22 @@ func IsValidMessage(message string) bool {
 	return true
 }
 
-func (r *Client) Write(message string) (int, error) {
+func (r *Client) Write(message string) error {
 	message = strings.TrimRight(message, "\n")
 	if !IsValidMessage(message) {
-		return 0, fmt.Errorf("a message was of length 0 which would cause a disconnect")
+		return fmt.Errorf("a message was of length 0 which would cause a disconnect")
 	}
 
 	b := []byte(fmt.Sprintf("%s\n", message))
-	return r.Conn.Write(b)
+	_, err := r.Conn.Write(b)
+	return err
 }
 
-func (r *Client) WriteTimeout(message string, timeout time.Duration) (int, error) {
+func (r *Client) WriteTimeout(message string, timeout time.Duration) error {
 	r.Conn.SetWriteDeadline(time.Now().Add(timeout))
-	n, err := r.Write(message)
+	err := r.Write(message)
 	r.Conn.SetWriteDeadline(time.Time{})
-	return n, err
+	return err
 }
 
 func (r *Client) Read() (string, error) {
@@ -85,7 +87,7 @@ func DialRcon(address string, password string, timeout time.Duration) (Client, e
 	rcon.Conn.SetDeadline(time.Now().Add(timeout))
 	// We need to send an extra character after the password otherwise we wont error on the next read
 	// Sending tcpr('hello') so even if tcpr_everything is turned off we can still read something
-	_, err = rcon.Write(password + "\ntcpr('hello')")
+	err = rcon.Write(password + "\ntcpr('hello')")
 	if IsTimeoutError(err) {
 		return rcon, errors.Wrap(err, "client timed out while sending passowrd")
 	} else if err != nil {
@@ -109,8 +111,24 @@ func DialRcon(address string, password string, timeout time.Duration) (Client, e
 
 // Rcon commands
 
+func (r *Client) RunScript(path string) error {
+	file, err := ioutil.ReadFile(path)
+	if err != nil {
+		return errors.Wrap(err, "error reading script file")
+	}
+
+	//TODO: remove comments from script
+	script := strings.ReplaceAll(string(file), "\n", " ")
+
+	// hash := fmt.Sprintf("%x", md5.Sum(file))
+	// script = script + fmt.Sprintf("tcpr(\"%s\");", hash)
+
+	err = r.Write(script)
+	return err
+}
+
 func (r *Client) Message(message string) error {
-	_, err := r.Write(fmt.Sprintf("/msg %s", message))
+	err := r.Write(fmt.Sprintf("/msg %s", message))
 	return err
 }
 
@@ -120,6 +138,10 @@ type Handler struct {
 	pattern         *regexp.Regexp
 	callback        func(Message, *Client) error
 	removeTimestamp bool
+}
+
+func (h Handler) String() string {
+	return pattern.String()
 }
 
 func (h *Handler) RemoveTimestamp() *Handler {
@@ -152,6 +174,16 @@ func (r *Client) HandleFunc(pattern string, handler func(Message, *Client) error
 	h := Handler{re, handler, false}
 	r.handlers = append(r.handlers, &h)
 	return &h
+}
+
+func (r *Client) RemoveHandler(pattern string) bool {
+	for i, h := range r.handlers {
+		if h.String() == pattern {
+			r.handlers = append(r.handlers[:i], r.handlers[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Client) Handle() error {
